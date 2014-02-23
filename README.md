@@ -45,22 +45,29 @@ Bonsai Program arguments
 ------------------------
 Standard:
 
-* -h    Display the help and shows default argument values
-* -i    Input snapshot filename
+     -h  --help             Prints this help 
+     -i  --infile #         Input snapshot filename 
+     --logfile #        Log filename [gpuLog.log]
+     --dev #            Device ID [0]
+     --renderdev #      Rendering Device ID [0]
+     -t  --dt #             time step [0.0625]
+     -T  --tend #           N-body end time [1]
+     -e  --eps #            softening (will be squared) [0.05]
+     -o  --theta #          opening angle (theta) [0.75]
+     --snapname #       snapshot base name (N-body time is appended in 000000 format) [snapshot_]
+     --snapiter #       snapshot iteration (N-body time) [-1]
+     --rmdist #         Particle removal distance (-1 to disable) [-1]
+     --valueadd #       value to add to the snapshot [0]
+     -r  --rebuild #        rebuild tree every # steps [2]
+     --reducebodies #   cut down bodies dataset by # factor 
+     --log              enable logging 
+     --prepend-rank     prepend the MPI rank in front of the log-lines 
+     --direct           enable N^2 direct gravitation [off]
+     --plummer  #      use plummer model with # particles per proc
+     --sphere   #      use spherical model with # particles per proc
+     --diskmode        use diskmode to read same input file all MPI taks and randomly shuffle its positions
+ 
 
-* --dev     Device ID to run simulation on
-* -t    Simulation time-step
-* -T    Simulation end-time
-* -e    Softening-value (will be squared)
-* -o    Opening angle (theta)
-* -r    Rebuild tree every # steps
-
-* --snapname Snapshot base name (N-body time is appended in 000000 format) 
-* --snapiter Snapshot iteration (N-body time)
-* --valueadd Value to add to the snapshot name
-* --log         Enable printfs
-* --logfile Filename to store kernel timing information 
-* --rmdist   Particle removal distance (uncommented in the code)
 
 Demo specific:
 
