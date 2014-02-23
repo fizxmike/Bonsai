@@ -34,12 +34,12 @@ option(USE_B40C
   
 option(COMPILE_SM30
   "On to enable SM30 compilation"
-  ON
+  OFF
   )
 
 option(USE_DUST
   "On to enable dust rendering"
-  ON
+  OFF
   )
  
 option(CUDA_KEEP_INTERMEDIATE_FILES
@@ -123,7 +123,7 @@ else (COMPILE_SM30)
     ${CUFILES}
 	CUDAkernels/dev_approximate_gravity_warp_fermi.cu  
 	)
-  set(GENCODE -gencode arch=compute_20,code=sm_20 -gencode arch=compute_20,code=compute_20)
+  set(GENCODE -gencode arch=compute_20,code=sm_20 -gencode arch=compute_20,code=compute_20 -Xptxas=-v -ftz=true)
 endif (COMPILE_SM30)
 
 set (CUHFILES

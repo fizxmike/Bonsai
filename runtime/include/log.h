@@ -32,7 +32,8 @@
         extern void prependrankLOGF(const char *fmt, ...);
         #define LOGF(file, ...) {if (ENABLE_RUNTIME_LOG) if(PREPEND_RANK)  prependrankLOGF(__VA_ARGS__); else fprintf(file, __VA_ARGS__);}
   #else
-        #define LOGF(file, fmt, ...) {if (ENABLE_RUNTIME_LOG) fprintf(file, fmt,__VA_ARGS__);}
+        #define LOGF(file, fmt, ...) {if (ENABLE_RUNTIME_LOG) fprintf(file, fmt, ##__VA_ARGS__);}
+        //in the above line: the '##' in front of variadic macro deletes the extra ',' when there are no extra args (http://gcc.gnu.org/onlinedocs/cpp/Variadic-Macros.html)
   #endif
 
 
