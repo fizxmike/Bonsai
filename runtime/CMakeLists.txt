@@ -1,4 +1,4 @@
-PROJECT(bonsai2)
+
 
 CMAKE_MINIMUM_REQUIRED(VERSION 2.8)
 
@@ -14,8 +14,19 @@ option(CUDA_DEVICE_DEBUGGING
 
 option(USE_MPI
   "On to build support for MPI"
+  ON
+  )
+
+option(USE_GALACTICS
+  "Include John Dubinsky galatics IC generator"
   OFF
   )
+
+option(USE_GALACTICS_IFORT
+  "Set to ON if galactics is compipled with ifort"
+  OFF
+)
+
 
 option(USE_OPENGL
   "On to build support for OpenGL Rendering"
@@ -29,7 +40,7 @@ option(USE_THRUST
 
 option(USE_B40C
   "On to use B40C sorting"
-  OFF
+  ON
   )
   
 option(COMPILE_SM30
@@ -116,6 +127,7 @@ if (COMPILE_SM30)
     ${CUFILES}
     CUDAkernels/dev_approximate_gravity_warp_new.cu  
     )
+  add_definitions("-DKEPLER")
   set(GENCODE -gencode arch=compute_35,code=sm_35 -gencode arch=compute_35,code=compute_35 -Xptxas=-v -ftz=true)
 
 else (COMPILE_SM30)
@@ -245,7 +257,8 @@ endif (USE_OPENGL)
 if(WIN32)
   add_definitions( "/arch:SSE4")
  else (WIN32)
-  add_definitions( "-msse4")
+   #  add_definitions( "-msse4 -std=gnu++0x")
+     add_definitions( "-msse4")
 endif (WIN32)
 
 if (USE_MPI)
@@ -266,7 +279,16 @@ cuda_add_executable(${BINARY_NAME}
   OPTIONS ${GENCODE} ${VERBOSE_PTXAS} ${DEVICE_DEBUGGING} ${KEEP}
   )
 
-target_link_libraries(${BINARY_NAME} ${ALL_LIBRARIES})
+if (USE_GALACTICS)
+  add_definitions("-DGALACTICS")
+  if (USE_GALACTICS_IFORT)
+    target_link_libraries(${BINARY_NAME} ${ALL_LIBRARIES} -L./ -lgengalaxy -lifcore)
+  else(USE_GALACTICS_IFORT)
+    target_link_libraries(${BINARY_NAME} ${ALL_LIBRARIES} -L./ -lgengalaxy -lgfortran)
+  endif(USE_GALACTICS_IFORT)
+else(USE_GALACTICS)
+  target_link_libraries(${BINARY_NAME} ${ALL_LIBRARIES})
+endif(USE_GALACTICS)
 
 #copy test data file
 file(COPY ${CMAKE_SOURCE_DIR}/model3_child_compact.tipsy DESTINATION ${CMAKE_BINARY_DIR})

@@ -31,8 +31,10 @@
 #include <iostream>
 #include <fstream>
 #include <sys/types.h>
-#include <unistd.h>
 
+#ifndef WIN32
+  #include <unistd.h>
+#endif
 
 
 #include "log.h"
@@ -377,9 +379,12 @@ protected:
    //Simulation properties
   int           iter;
   float         t_current, t_previous;
-  int           snapshotIter;   
+  float         snapshotIter;   
   string        snapshotFile;
-  int           nextSnapTime;
+  float         nextSnapTime;
+
+  float        statisticsIter;
+  float        nextStatsTime;
 
   int   NTotal, NFirst, NSecond, NThird, snapShotAdd;
   
@@ -390,7 +395,8 @@ protected:
   int   dt_limit;
   float eta;
   float timeStep;
-  int   tEnd;
+  float tEnd;
+  int   iterEnd;
   float theta;
 
   bool  useDirectGravity;
@@ -481,9 +487,12 @@ protected:
 
   my_dev::kernel domainCheckSFC;
   my_dev::kernel internalMoveSFC;
+  my_dev::kernel internalMoveSFC2;
   my_dev::kernel extractOutOfDomainParticlesAdvancedSFC;
+  my_dev::kernel extractOutOfDomainParticlesAdvancedSFC2;
   my_dev::kernel insertNewParticlesSFC;
   my_dev::kernel extractSampleParticlesSFC;
+  my_dev::kernel domainCheckSFCAndAssign;
 
 #ifdef USE_B40C
   Sort90 *sorter;
@@ -548,7 +557,7 @@ public:
 
    //jb made these functions public for testing
    void set_context(bool disable_timing = false);
-   void set_context(std::ofstream &log, bool disable_timing = false);
+   void set_context(std::ostream &log, bool disable_timing = false);
    void set_context2();
 
    int getAllignmentOffset(int n);
@@ -600,7 +609,8 @@ public:
           totalGPUGravTimeLocal(0), totalGPUGravTimeLET(0),
           lastGPUGravTimeLocal(0), lastGPUGravTimeLET(0),
           lastLETCommTime(0), totalLETCommTime(0),
-          totalDomUp(0), totalDomEx(0) {}
+          totalDomUp(0), totalDomEx(0), totalDomWait(0),
+          totalPredCor(0){}
 
       int    Nact_since_last_tree_rebuild;
       double totalGravTime; //CPU timers, includes any non-hidden communication cost
@@ -620,6 +630,8 @@ public:
       double totalLETCommTime;
       double totalDomUp;
       double totalDomEx;
+      double totalDomWait;
+      double totalPredCor;
   };
 
   void iterate_setup(IterationData &idata); 
@@ -643,19 +655,16 @@ public:
 
   //Parallel version functions
   int procId, nProcs;   //Process ID in the mpi stack, number of processors in the commm world
-  int nx, ny, nz;       //The division parameters, number of procs in the x,y and z axis
-  int sampleFreq;       //Sample frequency for the division
-  int nTotalFreq;       //Total Number of particles over all processes
-  
-  int prevSampFreq;     //Sample frequency of the previous step
+  unsigned long long  nTotalFreq_ull;       //Total Number of particles over all processes
+
+
   double prevDurStep;   //Duration of gravity time in previous step
   double thisPartLETExTime;     //The time it took to communicate with the neighbours during the last step
 
   double4 *currentRLow, *currentRHigh;  //Contains the actual domain distribution, to be used
                                         //during the LET-tree generatino
 
-  
-  real4 *localGrpTreeCntSize;
+//  real4 *localGrpTreeCntSize;
 
   real4 *globalGrpTreeCntSize;
 
@@ -702,7 +711,7 @@ public:
 
   //Functions for domain division
   void createORB();
-  void determine_sample_freq(int numberOfParticles);
+  void mpiSumParticleCount(int numberOfParticles);
 
   void sendCurrentRadiusInfo(real4 &rmin, real4 &rmax);
   void sendCurrentRadiusAndSampleInfo(real4 &rmin, real4 &rmax, int nsample, int *nSamples);
@@ -714,27 +723,21 @@ public:
   int  gpu_exchange_particles_with_overflow_check(tree_structure &tree,
                                                   bodyStruct *particlesToSend, 
                                                   my_dev::dev_mem<uint> &extractList, int nToSend);
+
+  int gpu_exchange_particles_with_overflow_check_SFC2(tree_structure &tree,
+                                                    bodyStruct *particlesToSend,
+                                                    int *nparticles, int *nsendDispls, int *nreceive,
+                                                    int nToSend);
+
   void gpuRedistributeParticles();
 
-  int  exchange_particles_with_overflow_check(tree_structure &localTree);
+//  int  exchange_particles_with_overflow_check(tree_structure &localTree);
   int gpu_exchange_particles_with_overflow_check_SFC(tree_structure &tree,
                                                   bodyStruct *particlesToSend,
                                                   my_dev::dev_mem<uint> &extractList, int nToSend);
 
-  template<class T>
-  int MP_exchange_particle_with_overflow_check(int ibox,
-                                              T *source_buffer,
-                                              vector<T> &recv_buffer,
-                                              int firstloc,
-                                              int nparticles,
-                                              int isource,
-                                              int &nsend,
-                                              unsigned int &recvCount);
 
    //Local Essential Tree related functions
-
-  real4* MP_exchange_bhlist(int ibox, int isource,
-                                int bufferSize, real4 *letDataBuffer);
 
 
   void ICRecv(int procId, vector<real4> &bodyPositions, vector<real4> &bodyVelocities,  vector<int> &bodiesIDs);
@@ -768,8 +771,7 @@ public:
   void parallelDataSummary(tree_structure &tree, float lastExecTime, float lastExecTime2, double &domUpdate, double &domExch);
 
 
-  void gpu_collect_hashes(int nHashes, uint4 *hashes, uint4 *boundaries, float lastExecTime, float lastExecTime2);
-  void gpuRedistributeParticles_SFC(uint4 *boundaries);
+   void gpuRedistributeParticles_SFC(uint4 *boundaries);
 
   void build_GroupTree(int n_bodies, uint4 *keys, uint2 *nodes, uint4 *node_keys, uint  *node_levels,
                        int &n_levels, int &n_nodes, int &startGrp, int &endGrp);
@@ -779,15 +781,14 @@ public:
 
   void sendCurrentInfoGrpTree();
 
-  void computeSampleRateSFC(float lastExecTime, int &nSamples, int &sampleRate);
+  void computeSampleRateSFC(float lastExecTime, int &nSamples, float &sampleRate);
 
   void exchangeSamplesAndUpdateBoundarySFC(uint4 *sampleKeys,    int  nSamples,
                                            uint4 *globalSamples, int  *nReceiveCnts, int *nReceiveDpls,
-                                           int    totalCount,   uint4 *parallelBoundaries);
+                                           int    totalCount,   uint4 *parallelBoundaries, float lastExectime);
 
   void essential_tree_exchangeV2(tree_structure &tree,
                                  tree_structure &remote,
-                                 nInfoStruct *nodeInfo,
                                  vector<real4> &topLevelTrees,
                                  vector<uint2> &topLevelTreesSizeOffset,
                                  int     nTopLevelTrees);
@@ -795,6 +796,34 @@ public:
       tree_structure &tree, tree_structure &remote,
       real4 **treeBuffers,  int* treeBuffersSource, int &topNodeOnTheFlyCount,
       int &recvTree, bool &mergeOwntree, int &procTrees, double &tStart);
+
+  void checkGPUAndStartLETComputation(tree_structure &tree,
+      tree_structure &remote,
+      int            &topNodeOnTheFlyCount,
+      int            &nReceived,
+      int            &procTrees,
+      double         &tStart,
+      double         &totalLETExTime,
+      bool            mergeOwntree,
+      int            *treeBuffersSource,
+      real4         **treeBuffers);
+
+
+#if 0
+  template<class T>
+  int MP_exchange_particle_with_overflow_check(int ibox,
+                                              T *source_buffer,
+                                              vector<T> &recv_buffer,
+                                              int firstloc,
+                                              int nparticles,
+                                              int isource,
+                                              int &nsend,
+                                              unsigned int &recvCount);
+
+  real4* MP_exchange_bhlist(int ibox, int isource,
+                                int bufferSize, real4 *letDataBuffer);
+
+  void gpu_collect_hashes(int nHashes, uint4 *hashes, uint4 *boundaries, float lastExecTime, float lastExecTime2);
 
   void tree_walking_tree_stack_versionC13(
      real4 *multipoleS, nInfoStruct* nodeInfoS, //Local Tree
@@ -814,6 +843,8 @@ public:
                                 uint2 *curLevelStack,
                                 uint2 *nextLevelStack,
                                 int &DistanceCheck);
+#endif
+
   int recursiveBasedTopLEvelsCheckStart(tree_structure &tree,
                                         real4 *treeBuffer,
                                         real4 *grpCenter,
@@ -884,7 +915,8 @@ public:
 	}
 
   octree(char **argv, const int device = 0, const float _theta = 0.75, const float eps = 0.05,
-         string snapF = "", int snapI = -1,  float tempTimeStep = 1.0 / 16.0, int tempTend = 1000,
+         string snapF = "", float snapI = -1,  float tempTimeStep = 1.0 / 16.0, float tempTend = 1000,
+         int _iterEnd = (1<<30),
          int maxDistT = -1, int snapAdd = 0, const int _rebuild = 2,
          bool direct = false)
   : rebuild_tree_rate(_rebuild), procId(0), nProcs(1), thisPartLETExTime(0), useDirectGravity(direct)
@@ -925,11 +957,15 @@ public:
 
 //    LOGF(stderr, "Settings device : %d\t"  << devID << "\t" << device << "\t" << nProcs <<endl;
 
+    statisticsIter = 0; //0=disabled, 1 = Every N-body unit, 2= every 2nd n-body unit, etc..
+    nextStatsTime  = 0;
+
     snapshotIter = snapI;
     snapshotFile = snapF;
 
     timeStep = tempTimeStep;
     tEnd     = tempTend;
+    iterEnd  = _iterEnd;
 
     removeDistance = (float)maxDistT;
     snapShotAdd    = snapAdd;
@@ -956,7 +992,6 @@ public:
     infoGrpTreeBuffer.resize(7*nProcs);
     exchangePartBuffer.resize(8*nProcs);
 
-    localGrpTreeCntSize = NULL;
     globalGrpTreeCntSize = NULL;
 
 
@@ -983,13 +1018,13 @@ public:
       {
               int src = (procId-i);
               if(src < 0) src+=nProcs;
-              fprintf(stderr, "[%d] Writing src: %d \n", procId, src);
+//              fprintf(stderr, "[%d] Writing src: %d \n", procId, src);
               fullGrpAndLETRequestStatistics[src] = make_uint2(src+1,src);
       }
       for(int i=1; i <= NUMBER_OF_FULL_EXCHANGE/2; i++)
       {
               int src = (procId+i) % nProcs;
-              fprintf(stderr, "[%d] Writing src: %d \n", procId, src);
+//              fprintf(stderr, "[%d] Writing src: %d \n", procId, src);
               fullGrpAndLETRequestStatistics[src] = make_uint2(src+1,src);
       }
     }
@@ -1016,7 +1051,6 @@ public:
     delete[] currentRHigh;
     delete[] curSysState;
 
-    if(localGrpTreeCntSize) free(localGrpTreeCntSize);
     if(globalGrpTreeCntSize) delete[] globalGrpTreeCntSize;
     if(globalGrpTreeCount) delete[] globalGrpTreeCount;
     if(globalGrpTreeOffsets) delete[] globalGrpTreeOffsets;

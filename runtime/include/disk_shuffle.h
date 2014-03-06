@@ -11,7 +11,7 @@ struct DiskShuffle
       sp.clear();
       dp.clear();
 
-      fread(&h, sizeof(h), 1, in);
+      size_t res = fread(&h, sizeof(h), 1, in);
 
       const float time = h.time;
       const int nstar = h.nstar;
@@ -20,12 +20,12 @@ struct DiskShuffle
       for(int i=0;i<ndark;i++)
       {
         dark_particle _dp;
-        fread(&_dp, sizeof(dark_particle), 1, in);  
+        res = fread(&_dp, sizeof(dark_particle), 1, in);
         dp.push_back(_dp);
       }
       for(int i=0;i<nstar;i++){     
         star_particle _sp;
-        fread(&_sp, sizeof(star_particle), 1, in);
+        res = fread(&_sp, sizeof(star_particle), 1, in);
         sp.push_back(_sp);
       }
     }
@@ -59,6 +59,13 @@ struct DiskShuffle
       const double angl = (2*drand48()-1.)*M_PI;
       rotate_xy(angl, pos);
       rotate_xy(angl, vel);
+      const float f = 1.0e-3;
+      pos[0] *= 1 + f * (2.0*drand48()- 1.0);
+      pos[1] *= 1 + f * (2.0*drand48()- 1.0);
+      pos[2] *= 1 + f * (2.0*drand48()- 1.0);
+      vel[0] *= 1 + f * (2.0*drand48()- 1.0);
+      vel[1] *= 1 + f * (2.0*drand48()- 1.0);
+      vel[2] *= 1 + f * (2.0*drand48()- 1.0);
     }
 
     std::vector<dvec3> _pos, _vel;

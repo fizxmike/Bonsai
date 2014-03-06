@@ -49,7 +49,8 @@ inline void __checkCudaErrors(cudaError err, const char *file, const int line )
     if(cudaSuccess != err)                                                                                                                 
     {                                                                                                                                      
 //        fprintf(stderr, "%s(%i) : CUDA Runtime API error %d: %s.\n",file, line, (int)err, cudaGetErrorString( err ) );
-        LOGF(stderr, "%s(%i) : CUDA Runtime API error %d: %s.\n",file, line, (int)err, cudaGetErrorString( err ) );
+      LOGF(stderr, "%s(%i) : CUDA Runtime API error %d: %s.\n",file, line, (int)err, cudaGetErrorString( err ) );
+      fprintf(stderr, "%s(%i) : CUDA Runtime API error %d: %s.\n",file, line, (int)err, cudaGetErrorString( err ) );
         exit(-1);                                                                                                                          
     }                                                                                                                                      
 }                                                                                                                                          
@@ -64,6 +65,7 @@ inline void __getLastCudaError(const char *errorMessage, const char *file, const
     {                                                                                                                                      
 //        fprintf(stderr, "%s(%i) : getLastCudaError() CUDA error : %s : (%d) %s.\n", file, line, errorMessage, (int)err, cudaGetErrorString( err ) );
         LOGF(stderr, "%s(%i) : getLastCudaError() CUDA error : %s : (%d) %s.\n", file, line, errorMessage, (int)err, cudaGetErrorString( err ) );
+        fprintf(stderr, "%s(%i) : getLastCudaError() CUDA error : %s : (%d) %s.\n", file, line, errorMessage, (int)err, cudaGetErrorString( err ) );
         exit(-1);                                                                                                                          
     }                                                                                                                                      
 }                                                                                                                                          
@@ -107,7 +109,7 @@ namespace my_dev {
     bool logfile_flag;
     bool disable_timing;
     
-    ofstream *logFile;
+    ostream *logFile;
     
     int logID;  //Unique ID to every log line
     
@@ -115,7 +117,7 @@ namespace my_dev {
     //Events:
     cudaEvent_t start, stop;
     
-    //Compute capabilty, important for default compilation mode
+    //Compute capability, important for default compilation mode
     int ccMajor;
     int ccMinor;
     int defaultComputeMode;   
@@ -147,7 +149,7 @@ namespace my_dev {
     int getComputeCapabilityMinor() const {return ccMajor;}
      
     
-    int create(std::ofstream &log, bool disableTiming = false)
+    int create(std::ostream &log, bool disableTiming = false)
     {
       disable_timing = disableTiming;
       logfile_flag = true;
@@ -805,22 +807,6 @@ namespace my_dev {
     void d2h(bool OCL_BLOCKING = true, cudaStream_t stream = 0)   {      
 
       d2h(size, OCL_BLOCKING, stream);
-//      assert(context_flag);
-//      assert(hDeviceMem_flag);
-//      assert(size > 0);
-//
-//      if(OCL_BLOCKING)
-//      {
-//        CU_SAFE_CALL(cudaMemcpy(&host_ptr[0], hDeviceMem, size*sizeof(T), cudaMemcpyDeviceToHost));
-//      }
-//      else
-//      {
-//        //Async copy, ONLY works for page-locked memory therefore default parameter
-//        //is blocking.
-//        assert(pinned_mem);
-//        CU_SAFE_CALL(cudaMemcpyAsync(&host_ptr[0], hDeviceMem, size*sizeof(T),cudaMemcpyDeviceToHost, stream));
-//        CU_SAFE_CALL(cudaEventRecord(asyncCopyEvent, stream));
-//      }
     }
 
     //D2h that only copies a certain number of items to the host
@@ -846,6 +832,30 @@ namespace my_dev {
       }
     }    
     
+    //Copy to a specified buffer
+    void d2h(int number, void* dst, bool OCL_BLOCKING = true, cudaStream_t stream = 0)   {
+      assert(context_flag);
+      assert(hDeviceMem_flag);
+
+      if(number == 0) return;
+
+      assert(size > 0);
+
+      if(OCL_BLOCKING)
+      {
+        CU_SAFE_CALL(cudaMemcpy(dst, hDeviceMem, number*sizeof(T),cudaMemcpyDeviceToHost));
+      }
+      else
+      {
+        //Async copy, ONLY works for page-locked memory therefore default parameter
+        //is blocking.
+        assert(pinned_mem);
+        CU_SAFE_CALL(cudaMemcpyAsync(&host_ptr[0], hDeviceMem, number*sizeof(T),cudaMemcpyDeviceToHost, stream));
+        CU_SAFE_CALL(cudaEventRecord(asyncCopyEvent, stream));
+      }
+    }
+
+
     void h2d(bool OCL_BLOCKING  = true, cudaStream_t stream = 0)   {
       assert(context_flag);
       assert(hDeviceMem_flag);

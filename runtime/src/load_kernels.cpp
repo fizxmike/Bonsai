@@ -29,7 +29,7 @@ void octree::set_context( bool disable_timing) {
 }
 
 
-void octree::set_context(std::ofstream &log, bool disable_timing) {  
+void octree::set_context(std::ostream &log, bool disable_timing) {
   
   devContext.create(log, disable_timing);
   set_context2();
@@ -300,8 +300,9 @@ void octree::load_kernels() {
   getNActive.create("get_nactive", (const void*)&get_nactive);
   approxGrav.create("dev_approximate_gravity", (const void*)&dev_approximate_gravity);
 
-#if 0  /* preferL1 equal egaburov */
+#ifdef KEPLER /* preferL1 equal egaburov */
   cudaFuncSetCacheConfig((const void*)&dev_approximate_gravity, cudaFuncCachePreferL1);
+  cudaFuncSetCacheConfig((const void*)&dev_approximate_gravity_let, cudaFuncCachePreferL1);
 #if 0
 #if 1
   cudaDeviceSetSharedMemConfig(cudaSharedMemBankSizeFourByte);
@@ -345,9 +346,13 @@ void octree::load_kernels() {
   segmentedSummaryBasic.setContext(devContext);
   domainCheckSFC.setContext(devContext);
   internalMoveSFC.setContext(devContext);
+  internalMoveSFC2.setContext(devContext);
   extractOutOfDomainParticlesAdvancedSFC.setContext(devContext);
+  extractOutOfDomainParticlesAdvancedSFC2.setContext(devContext);
   insertNewParticlesSFC.setContext(devContext);
   extractSampleParticlesSFC.setContext(devContext);
+  domainCheckSFCAndAssign.setContext(devContext);
+
 
 
 #ifdef USE_CUDA
@@ -357,14 +362,18 @@ void octree::load_kernels() {
   extractOutOfDomainBody.load_source("./parallel.ptx", pathName.c_str());
   insertNewParticles.load_source("./parallel.ptx", pathName.c_str());
   internalMove.load_source("./parallel.ptx", pathName.c_str());
+
   
   build_parallel_grps.load_source("./build_tree.ptx", pathName.c_str());
   segmentedSummaryBasic.load_source("./build_tree.ptx", pathName.c_str());
   domainCheckSFC.load_source("./parallel.ptx", pathName.c_str());
   internalMoveSFC.load_source("./parallel.ptx", pathName.c_str());
+  internalMoveSFC2.load_source("./parallel.ptx", pathName.c_str());
   extractOutOfDomainParticlesAdvancedSFC.load_source("./parallel.ptx", pathName.c_str());
+  extractOutOfDomainParticlesAdvancedSFC2.load_source("./parallel.ptx", pathName.c_str());
   insertNewParticlesSFC.load_source("./parallel.ptx", pathName.c_str());
   extractSampleParticlesSFC.load_source("./parallel.ptx", pathName.c_str());
+  domainCheckSFCAndAssign.load_source("./parallel.ptx", pathName.c_str());
 
   domainCheck.create("doDomainCheck", (const void*)&doDomainCheck);
   extractSampleParticles.create("extractSampleParticles", (const void*)&gpu_extractSampleParticles);
@@ -378,8 +387,11 @@ void octree::load_kernels() {
   segmentedSummaryBasic.create("segmentedSummaryBasic", (const void*)&gpu_segmentedSummaryBasic);
   domainCheckSFC.create("domainCheckSFC", (const void*)&gpu_domainCheckSFC);
   internalMoveSFC.create("internalMoveSFC", (const void*)&gpu_internalMoveSFC);
+  internalMoveSFC2.create("internalMoveSFC2", (const void*)&gpu_internalMoveSFC2);
   extractOutOfDomainParticlesAdvancedSFC.create("extractOutOfDomainParticlesAdvancedSFC", (const void*)&gpu_extractOutOfDomainParticlesAdvancedSFC);
+  extractOutOfDomainParticlesAdvancedSFC2.create("extractOutOfDomainParticlesAdvancedSFC2", (const void*)&gpu_extractOutOfDomainParticlesAdvancedSFC2);
   insertNewParticlesSFC.create("insertNewParticlesSFC", (const void*)&gpu_insertNewParticlesSFC);
+  domainCheckSFCAndAssign.create("domainCheckSFCAndAssign", (const void*)&gpu_domainCheckSFCAndAssign);
 
 #else
 

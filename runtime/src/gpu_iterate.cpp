@@ -1,8 +1,10 @@
 #include "octree.h"
+#include  "postProcessModules.h"
 
 #include <iostream>
 #include <algorithm>
 #include <iomanip>
+
 using namespace std;
 
 static double de_max = 0;
@@ -30,55 +32,34 @@ inline float host_int_as_float(int val)
 void octree::makeLET()
 {
    //LET code test
-  double tTest = get_time();
-
+  double t00 = get_time();
 
   //Start copies, while grpTree info is exchanged
-  localTree.boxSizeInfo.d2h  (localTree.n_nodes,   false, LETDataToHostStream->s());
-  localTree.boxCenterInfo.d2h(localTree.n_nodes,   false, LETDataToHostStream->s());
-  localTree.multipole.d2h    (3*localTree.n_nodes, false, copyStream->s());
+  localTree.boxSizeInfo.d2h  (  localTree.n_nodes, false, LETDataToHostStream->s());
+  localTree.boxCenterInfo.d2h(  localTree.n_nodes, false, LETDataToHostStream->s());
+  localTree.multipole.d2h    (3*localTree.n_nodes, false, LETDataToHostStream->s());
+  localTree.boxSizeInfo.waitForCopyEvent();
+  localTree.boxCenterInfo.waitForCopyEvent();
   
+  double t10 = get_time();
   //Exchange domain grpTrees, while memory copies take place
   this->sendCurrentInfoGrpTree();
 
-  localTree.boxSizeInfo.waitForCopyEvent();
-  localTree.boxCenterInfo.waitForCopyEvent();
+  double t20 = get_time();
 
-  //Build the pre-processed array, while multipole-memory copy is (possibly) still going on
-  nInfoStruct *nodeInfo = new nInfoStruct[localTree.n_nodes];
-  nInfoStruct nInfo;
-  union{float f; int i;} u; //__float_as_int
-  for(int i=0; i < localTree.n_nodes; i++)
-  {
-    nInfo.x     = localTree.boxCenterInfo[i].w;
-    u.f         = localTree.boxSizeInfo  [i].w;
-    nInfo.y     = u.i;
-
-    nInfo.z     = 0;
-    nodeInfo[i] = nInfo;
-  }
 
   localTree.multipole.waitForCopyEvent();
 
-//
-//  Hier gebleven
-//  Code schrijven die een extract maakt van de bovenste levels
-//  Kan dat niet op de GPU?
-//  Misschien wel, maar dan gekloot met offsets, sneller om zelfde te doen
-//  [info][particles][nodes start-level][nodes start-level+1]
-//
-//  Buffer nodig? Kunnen aantal nodes halen uit level list
-//  aantal particles niet
+  union{float f; int i;} u; //__float_as_int
 
   //The next piece of code, makes extracts from our tree-structure. This is done for the "copyTreeUpToLevel"
   //top levels. These small trees can then be send to other processors, that are far away. This should be
   //more efficient then making a tree for each of them.
 
-  //I make multiple copies depending on which level the tree has to go to. This to reduce
-  //data size that is being send around.
+  //Multiple copies are made depending on which level the tree has to go to.
+  //This to reduce data size that is being send around.
 
-
-  double t00        = get_time();
+  double t30        = get_time();
   int startLevel    = this->localTree.startLevelMin;
   uint2 node_begend;
 
@@ -100,8 +81,6 @@ void octree::makeLET()
     {
       nParticles = NLEAF*nNodes;
     }
-   // nParticles            += getTextureAllignmentOffset(nParticles, sizeof(real4));
-   // nNodes                += getTextureAllignmentOffset(nNodes    , sizeof(real4));
     bufferUpToThisLevel   += 5*nNodes+nParticles+1;
 
     //Total buffer size this level would be all previous levels plus this one
@@ -175,12 +154,7 @@ void octree::makeLET()
         } //if(this->localTree.boxCenterInfo[j].w < 0)
       }//for node_begend
     }//for level
-
-    //Make the particles and nodes align on memory boundaries
-    //nParticles  += getTextureAllignmentOffset(nParticles, sizeof(real4));
-    //nNodes      += getTextureAllignmentOffset(nNodes    , sizeof(real4));
-
-//    LOGF(stderr,"Total particles: %d and nodes %d (%d) \n", nParticles,nNodes, nodeBuffer.size());
+    //    LOGF(stderr,"Total particles: %d and nodes %d (%d) \n", nParticles,nNodes, nodeBuffer.size());
 
     real4 *buffer = &topLevelsBuffer[nextLevelOffsset];
 
@@ -222,17 +196,20 @@ void octree::makeLET()
   }
 #endif
 
-  LOGF(stderr,"MakeLET Preparing top trees took: %lg Total: %lg \n", get_time() -t00, get_time()-tTest);
+  double t40 = get_time();
+  LOGF(stderr,"MakeLET Preparing data-copy: %lg  sendGroups: %lg Copy: %lg TreeCpy: %lg Total: %lg \n",
+               t10-t00, t20-t10, t30-t20, t40-t30, t40-t00);
 
 
  //End tree-extract
 
 
   //Start LET kernels
-  essential_tree_exchangeV2(localTree, remoteTree, nodeInfo, topLevelsBuffer, treeSizeAndOffset, copyTreeUpToLevel);
-
-  
-  delete[] nodeInfo;
+  essential_tree_exchangeV2(localTree,
+                            remoteTree,
+                            topLevelsBuffer,
+                            treeSizeAndOffset,
+                            copyTreeUpToLevel);
 
   letRunning = false;
 }
@@ -244,7 +221,7 @@ extern void read_tipsy_file_parallel(vector<real4> &bodyPositions, vector<real4>
                               int rank, int procs, int &NTotal2, int &NFirst, 
                               int &NSecond, int &NThird, octree *tree,
                               vector<real4> &dustPositions, vector<real4> &dustVelocities,
-                              vector<int> &dustIDs, int reduce_bodies_factor, int reduce_dust_factor) ;
+                              vector<int> &dustIDs, int reduce_bodies_factor, int reduce_dust_factor, const bool restart) ;
 extern int setupMergerModel(vector<real4> &bodyPositions1,      vector<real4> &bodyVelocities1,
                             vector<int>   &bodyIDs1,            vector<real4> &bodyPositions2,
                             vector<real4> &bodyVelocities2,     vector<int>   &bodyIDs2);
@@ -289,7 +266,8 @@ bool octree::addGalaxy(int galaxyID)
     int NTotal, NFirst, NSecond, Nthird = 0;
     read_tipsy_file_parallel(newGalaxy_pos, newGalaxy_vel, newGalaxy_ids, 0, fileName, 
                              rank, procs, NTotal, NFirst, NSecond, NThird, this,
-                             newGalaxy_pos_dust, newGalaxy_vel_dust, newGalaxy_ids_dust, 1, 1);
+                             newGalaxy_pos_dust, newGalaxy_vel_dust, newGalaxy_ids_dust,
+                             1, 1, false);
     
 
     int n_addGalaxy      = (int) newGalaxy_pos.size();
@@ -444,22 +422,23 @@ bool octree::addGalaxy(int galaxyID)
 bool octree::iterate_once(IterationData &idata) {
     double t1 = 0;
 
-//if(t_current < 1) //Clear startup timings
-if(0)
-//if(iter < 32)	
-{
-	idata.totalGPUGravTimeLocal = 0;
-	idata.totalGPUGravTimeLET = 0;
-	idata.totalLETCommTime = 0;
-	idata.totalBuildTime = 0;
-	idata.totalDomTime = 0;
-	idata.lastWaitTime = 0;
-	idata.startTime = get_time();
-	idata.totalGravTime = 0;
-	idata.totalDomUp = 0;
-	idata.totalDomEx = 0;
-}
-
+    //if(t_current < 1) //Clear startup timings
+    //if(0)
+    if(iter < 32)
+    {
+      idata.totalGPUGravTimeLocal = 0;
+      idata.totalGPUGravTimeLET = 0;
+      idata.totalLETCommTime = 0;
+      idata.totalBuildTime = 0;
+      idata.totalDomTime = 0;
+      idata.lastWaitTime = 0;
+      idata.startTime = get_time();
+      idata.totalGravTime = 0;
+      idata.totalDomUp = 0;
+      idata.totalDomEx = 0;
+      idata.totalDomWait = 0;
+      idata.totalPredCor = 0;
+    }
 
 
     LOG("At the start of iterate:\n");
@@ -467,10 +446,14 @@ if(0)
     bool forceTreeRebuild = false;
     bool needDomainUpdate = true;
 
+    double tTempTime = get_time();
+
     //predict local tree
     devContext.startTiming(execStream->s());
     predict(this->localTree);
     devContext.stopTiming("Predict", 9, execStream->s());
+
+    idata.totalPredCor += get_time() - tTempTime;
 
     if(nProcs > 1)
     {
@@ -482,7 +465,8 @@ if(0)
         devContext.startTiming(execStream->s());
         parallelDataSummary(localTree, lastTotal, lastLocal, domUp, domEx);
         devContext.stopTiming("UpdateDomain", 6, execStream->s());
-        idata.lastDomTime   = get_time()-tZ;
+        double tZZ = get_time();
+        idata.lastDomTime   = tZZ-tZ;
         idata.totalDomTime += idata.lastDomTime;
 
         idata.totalDomUp += domUp;
@@ -491,6 +475,8 @@ if(0)
         devContext.startTiming(execStream->s());
         mpiSync();
         devContext.stopTiming("DomainUnbalance", 12, execStream->s());
+
+        idata.totalDomWait += get_time()-tZZ;
 
         needDomainUpdate    = false; //We did a boundary sync in the parallel decomposition part
         needDomainUpdate    = true; //TODO if I set it to false results degrade. Check why, for now just updte
@@ -611,6 +597,7 @@ if(0)
 
 
     //Compute the total number of interactions that occured
+    tTempTime = get_time();
 #if 1
    localTree.interactions.d2h();
 
@@ -627,6 +614,7 @@ if(0)
                    procId,iter, directSum ,apprSum, directSum / (float)localTree.n, apprSum / (float)localTree.n);
    devContext.writeLogEvent(buff2);
 #endif
+   LOGF(stderr,"Stats calculation took: %lg \n", get_time()-tTempTime);
 
 
     float ms=0, msLET=0;
@@ -664,10 +652,12 @@ if(0)
 //    lastTotal =  get_time() - t1;
 
     //Corrector
+    tTempTime = get_time();
     devContext.startTiming(execStream->s());
     correct(this->localTree);
     devContext.stopTiming("Correct", 8, execStream->s());
-    
+    idata.totalPredCor += get_time() - tTempTime;
+
 
     #ifdef USE_DUST
       //Correct
@@ -687,18 +677,54 @@ if(0)
     idata.Nact_since_last_tree_rebuild += this->localTree.n_active_particles;
 
     //Compute energies
+    tTempTime = get_time();
     devContext.startTiming(execStream->s());
     double de = compute_energies(this->localTree);
     devContext.stopTiming("Energy", 7, execStream->s());
+    idata.totalPredCor += get_time() - tTempTime;
+
+    if(statisticsIter > 0)
+    {
+      if(t_current >= nextStatsTime)
+      {
+        nextStatsTime += statisticsIter;
+        double tDens0 = get_time();
+        localTree.bodies_pos.d2h();
+        localTree.bodies_vel.d2h();
+        localTree.bodies_ids.d2h();
+
+        double tDens1 = get_time();
+        const DENSITY dens(procId, nProcs, localTree.n,
+                           &localTree.bodies_pos[0],
+                           &localTree.bodies_vel[0],
+                           &localTree.bodies_ids[0],
+                           1, 2.33e9, 20, "density", t_current);
+
+        double tDens2 = get_time();
+        if(procId == 0) LOGF(stderr,"Density took: Copy: %lg Create: %lg \n", tDens1-tDens0, tDens2-tDens1);
+
+        double tDisk1 = get_time();
+        const DISKSTATS diskstats(procId, nProcs, localTree.n,
+                           &localTree.bodies_pos[0],
+                           &localTree.bodies_vel[0],
+                           &localTree.bodies_ids[0],
+                           1, 2.33e9, "diskstats", t_current);
+
+        double tDisk2 = get_time();
+        if(procId == 0) LOGF(stderr,"Diskstats took: Create: %lg \n", tDisk2-tDisk1);
+      }
+    }//Statistics dumping
+
+
 
     if(snapshotIter > 0)
     {
-      int time = (int)t_current;
+      float time = t_current;
       if((time >= nextSnapTime))
       {
         nextSnapTime += snapshotIter;
         string fileName; fileName.resize(256);
-        sprintf(&fileName[0], "%s_%06d", snapshotFile.c_str(), time + snapShotAdd);
+        sprintf(&fileName[0], "%s_%010.4f", snapshotFile.c_str(), time + snapShotAdd);
         
         #ifdef USE_DUST
           //We move the dust data into the position data (on the device :) )
@@ -718,7 +744,7 @@ if(0)
         }
         else
         {
-          sprintf(&fileName[0], "%s_%06d-%d", snapshotFile.c_str(), time + snapShotAdd, procId);
+          sprintf(&fileName[0], "%s_%010.4f-%d", snapshotFile.c_str(), time + snapShotAdd, procId);
           write_snapshot_per_process(&localTree.bodies_pos[0], &localTree.bodies_vel[0],
                                      &localTree.bodies_ids[0], localTree.n + localTree.n_dust,
                                      fileName.c_str(), t_current) ;
@@ -728,13 +754,13 @@ if(0)
     }
 
 
-    //if(iter > 64) return true;
+    if (iter >= iterEnd) return true;
 
     if(t_current >= tEnd)
     {
       compute_energies(this->localTree);
       double totalTime = get_time() - idata.startTime;
-      LOG("Finished: %f > %d \tLoop alone took: %f\n", t_current, tEnd, totalTime);
+      LOG("Finished: %f > %f \tLoop alone took: %f\n", t_current, tEnd, totalTime);
      
       my_dev::base_mem::printMemUsage();
 
@@ -743,6 +769,18 @@ if(0)
     iter++; 
 
     return false;
+}
+
+void debugPrintProgress(int procId, int p)
+{
+#ifdef USE_MPI
+  MPI_Barrier(MPI_COMM_WORLD);
+  if (procId == 0)
+  {
+    fprintf(stderr, " === %d === \n", p);
+  }
+  MPI_Barrier(MPI_COMM_WORLD);
+#endif
 }
 
 void octree::iterate_setup(IterationData &idata) {
@@ -767,26 +805,25 @@ void octree::iterate_setup(IterationData &idata) {
   CU_SAFE_CALL(cudaEventCreate(&startRemoteGrav));
   CU_SAFE_CALL(cudaEventCreate(&endRemoteGrav));
 
-
+  devContext.writeLogEvent("Starting execution \n");
+  
   //Start construction of the tree
   sort_bodies(localTree, true);
   build(localTree);
   allocateTreePropMemory(localTree);
   compute_properties(localTree);
-
-
   letRunning = false;
      
   double t1;
   sort_bodies(localTree, true);
   //Initial prediction/acceleration to setup the system
   //Will be at time 0
-  //predict localtree
+  //predict the particles
   predict(this->localTree);
-
+  debugPrintProgress(procId,200);
   double notUsed = 0;
   if(nProcs > 1)
-    parallelDataSummary(localTree, 1, 1, notUsed, notUsed); //1 for all process, equal part distribution
+    parallelDataSummary(localTree, 30, 30, notUsed, notUsed); //1 for all process, equal part distribution
 
   //Start construction of the tree
   sort_bodies(localTree, true);
@@ -853,7 +890,7 @@ void octree::iterate_setup(IterationData &idata) {
   //Print time 0 snapshot
   if(snapshotIter > 0 )
   {
-      int time = (int)t_current;
+      float time = t_current;
       
       //We always snapshot the state at the current time, so we have the start
       //of the simulation included in our snapshots. This also allows us to
@@ -866,7 +903,7 @@ void octree::iterate_setup(IterationData &idata) {
         nextSnapTime += snapshotIter;       
         
         string fileName; fileName.resize(256);
-        sprintf(&fileName[0], "%s_%06d", snapshotFile.c_str(), time + snapShotAdd);
+        sprintf(&fileName[0], "%s_%010.4f", snapshotFile.c_str(), time + snapShotAdd);
         
         #ifdef USE_DUST
           //We move the dust data into the position data (on the device :) )
@@ -886,35 +923,74 @@ void octree::iterate_setup(IterationData &idata) {
         }
         else
         {
-          sprintf(&fileName[0], "%s_%06d-%d", snapshotFile.c_str(), time + snapShotAdd, procId);
+          sprintf(&fileName[0], "%s_%010.4f-%d", snapshotFile.c_str(), time + snapShotAdd, procId);
           write_snapshot_per_process(&localTree.bodies_pos[0], &localTree.bodies_vel[0],
                                      &localTree.bodies_ids[0], localTree.n + localTree.n_dust,
                                      fileName.c_str(), t_current) ;
         }
+      }//if 1
+  }//if snapShotIter > 0
 
+  if(statisticsIter > 0)
+  {
+    if(1)
+    {
+      nextStatsTime = t_current + statisticsIter;
+      double tDens0 = get_time();
+      localTree.bodies_pos.d2h();
+      localTree.bodies_vel.d2h();
+      localTree.bodies_ids.d2h();
 
-      }
-  }
+      double tDens1 = get_time();
+      const DENSITY dens(procId, nProcs, localTree.n,
+                         &localTree.bodies_pos[0],
+                         &localTree.bodies_vel[0],
+                         &localTree.bodies_ids[0],
+                         1, 2.33e9, 20, "density", t_current);
+
+      double tDens2 = get_time();
+      if(procId == 0) LOGF(stderr,"Density took: Copy: %lg Create: %lg \n", tDens1-tDens0, tDens2-tDens1);
+
+      double tDisk1 = get_time();
+      const DISKSTATS diskstats(procId, nProcs, localTree.n,
+                         &localTree.bodies_pos[0],
+                         &localTree.bodies_vel[0],
+                         &localTree.bodies_ids[0],
+                         1, 2.33e9, "diskstats", t_current);
+
+      double tDisk2 = get_time();
+      if(procId == 0) LOGF(stderr,"Diskstats took: Create: %lg \n", tDisk2-tDisk1);
+    }
+  }//Statistics dumping
 
   idata.startTime = get_time();
 }
 
 void octree::iterate_teardown(IterationData &idata) {
   double totalTime = get_time() - idata.startTime;
-  LOGF(stderr,"TIME [%02d] TOTAL: %g\t Grav: %g (GPUgrav %g , LET Com: %g)\tBuild: %g\tDomain: %g\t Wait: %g\tdomUp: %g\tdomEx: %g\n",
-                  procId, totalTime, idata.totalGravTime,
-                  (idata.totalGPUGravTimeLocal+idata.totalGPUGravTimeLET) / 1000,
-                  idata.totalLETCommTime,
-                  idata.totalBuildTime, idata.totalDomTime, idata.lastWaitTime,
-                  idata.totalDomUp, idata.totalDomEx);
+  if (procId == 0)
+  {
+	  LOGF(stderr,"TIME [%02d] TOTAL: %g\t Grav: %g (GPUgrav %g , LET Com: %g)\tBuild: %g\tDomain: %g\t Wait: %g\tdomUp: %g\tdomEx: %g\tdomWait: %g\ttPredCor: %g\n",
+			  procId, totalTime, idata.totalGravTime,
+			  (idata.totalGPUGravTimeLocal+idata.totalGPUGravTimeLET) / 1000,
+			  idata.totalLETCommTime,
+			  idata.totalBuildTime, idata.totalDomTime, idata.lastWaitTime,
+			  idata.totalDomUp, idata.totalDomEx, idata.totalDomWait, idata.totalPredCor);
+	  LOGF(stdout,"TIME [%02d] TOTAL: %g\t Grav: %g (GPUgrav %g , LET Com: %g)\tBuild: %g\tDomain: %g\t Wait: %g\tdomUp: %g\tdomEx: %g\tdomWait: %g\ttPredCor: %g\n",
+			  procId, totalTime, idata.totalGravTime,
+			  (idata.totalGPUGravTimeLocal+idata.totalGPUGravTimeLET) / 1000,
+			  idata.totalLETCommTime,
+			  idata.totalBuildTime, idata.totalDomTime, idata.lastWaitTime,
+			  idata.totalDomUp, idata.totalDomEx, idata.totalDomWait, idata.totalPredCor);
+  }	
   
   char buff[16384];
-  sprintf(buff,"TIME [%02d] TOTAL: %g\t Grav: %g (GPUgrav %g , LET Com: %g)\tBuild: %g\tDomain: %g\t Wait: %g\tdomUp: %g\tdomEx: %g\n",
+  sprintf(buff,"TIME [%02d] TOTAL: %g\t Grav: %g (GPUgrav %g , LET Com: %g)\tBuild: %g\tDomain: %g\t Wait: %g\tdomUp: %g\tdomEx: %g\tdomWait: %g\ttPredCor: %g\n",
                   procId, totalTime, idata.totalGravTime,
                   (idata.totalGPUGravTimeLocal+idata.totalGPUGravTimeLET) / 1000,
                   idata.totalLETCommTime,
                   idata.totalBuildTime, idata.totalDomTime, idata.lastWaitTime,
-                  idata.totalDomUp, idata.totalDomEx);
+                  idata.totalDomUp, idata.totalDomEx, idata.totalDomWait, idata.totalPredCor);
   devContext.writeLogEvent(buff);
 
   if(execStream != NULL)
@@ -948,7 +1024,34 @@ void octree::iterate() {
   for(int i=0; i < 10000000; i++) //Large number, limit
   {
     if (true == iterate_once(idata))
+    {
       break;    
+    }
+    double totalTime = get_time() - idata.startTime;
+    if (procId == 0)
+    {
+      LOGF(stderr,"TIME [%02d] TOTAL: %g\t Grav: %g (GPUgrav %g , LET Com: %g)\tBuild: %g\tDomain: %g\t Wait: %g\tdomUp: %g\tdomEx: %g\tdomWait: %g\ttPredCor: %g\n",
+          procId, totalTime, idata.totalGravTime,
+          (idata.totalGPUGravTimeLocal+idata.totalGPUGravTimeLET) / 1000,
+          idata.totalLETCommTime,
+          idata.totalBuildTime, idata.totalDomTime, idata.lastWaitTime,
+          idata.totalDomUp, idata.totalDomEx, idata.totalDomWait, idata.totalPredCor);
+      LOGF(stdout,"TIME [%02d] TOTAL: %g\t Grav: %g (GPUgrav %g , LET Com: %g)\tBuild: %g\tDomain: %g\t Wait: %g\tdomUp: %g\tdomEx: %g\tdomWait: %g\ttPredCor: %g\n",
+          procId, totalTime, idata.totalGravTime,
+          (idata.totalGPUGravTimeLocal+idata.totalGPUGravTimeLET) / 1000,
+          idata.totalLETCommTime,
+          idata.totalBuildTime, idata.totalDomTime, idata.lastWaitTime,
+          idata.totalDomUp, idata.totalDomEx, idata.totalDomWait, idata.totalPredCor);
+    }
+    char buff[16384];
+    sprintf(buff,"TIME [%02d] TOTAL: %g\t Grav: %g (GPUgrav %g , LET Com: %g)\tBuild: %g\tDomain: %g\t Wait: %g\tdomUp: %g\tdomEx: %g\tdomWait: %g\ttPredCor: %g\n",
+                    procId, totalTime, idata.totalGravTime,
+                    (idata.totalGPUGravTimeLocal+idata.totalGPUGravTimeLET) / 1000,
+                    idata.totalLETCommTime,
+                    idata.totalBuildTime, idata.totalDomTime, idata.lastWaitTime,
+                    idata.totalDomUp, idata.totalDomEx, idata.totalDomWait, idata.totalPredCor);
+    devContext.writeLogEvent(buff);
+
   } //end for i
   
   iterate_teardown(idata);
@@ -1053,8 +1156,6 @@ void octree::setActiveGrpsFunc(tree_structure &tree)
 //  this->resetCompact();
 //  LOG("t_previous: %lg t_current: %lg dt: %lg Active groups: %d (Total: %d)\n",
 //         t_previous, t_current, t_current-t_previous, tree.n_active_groups, tree.n_groups);
-  
-
 }
 
 void octree::direct_gravity(tree_structure &tree)
@@ -1517,8 +1618,13 @@ fprintf(stderr, "m31: %f %f %f %f \n", specialParticles[1].x,
   specialParticles[1].y, specialParticles[1].z, specialParticles[1].w);  */
 
 
-  tree.bodies_acc0.copy(real4Buffer1, tree.n);
-  tree.bodies_time.copy(float2Buffer, float2Buffer.get_size()); 
+  //tree.bodies_acc0.copy(real4Buffer1, tree.n);
+  //tree.bodies_time.copy(float2Buffer, float2Buffer.get_size());
+  tree.bodies_acc0.copy_devonly(real4Buffer1, tree.n);
+  tree.bodies_time.copy_devonly(float2Buffer, float2Buffer.get_size());
+
+
+
   
 
   #ifdef DO_BLOCK_TIMESTEP
@@ -1728,10 +1834,17 @@ double octree::compute_energies(tree_structure &tree)
   
   if(mpiGetRank() == 0)
   {
+#if 0
   LOG("iter=%d : time= %lg  Etot= %.10lg  Ekin= %lg   Epot= %lg : de= %lg ( %lg ) d(de)= %lg ( %lg ) t_sim=  %lg sec\n",
 		  iter, this->t_current, Etot, Ekin, Epot, de, de_max, dde, dde_max, get_time() - tinit);  
   LOGF(stderr, "iter=%d : time= %lg  Etot= %.10lg  Ekin= %lg   Epot= %lg : de= %lg ( %lg ) d(de)= %lg ( %lg ) t_sim=  %lg sec\n", 
 		  iter, this->t_current, Etot, Ekin, Epot, de, de_max, dde, dde_max, get_time() - tinit);          
+#else
+  printf("iter=%d : time= %lg  Etot= %.10lg  Ekin= %lg   Epot= %lg : de= %lg ( %lg ) d(de)= %lg ( %lg ) t_sim=  %lg sec\n",
+		  iter, this->t_current, Etot, Ekin, Epot, de, de_max, dde, dde_max, get_time() - tinit);  
+  fprintf(stderr, "iter=%d : time= %lg  Etot= %.10lg  Ekin= %lg   Epot= %lg : de= %lg ( %lg ) d(de)= %lg ( %lg ) t_sim=  %lg sec\n", 
+		  iter, this->t_current, Etot, Ekin, Epot, de, de_max, dde, dde_max, get_time() - tinit);          
+#endif
   }
 
   return de;
